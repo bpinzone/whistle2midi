@@ -141,9 +141,39 @@ class ChromaticNoteVisualizer:
         """Start the real-time visualization"""
         self.running = True
         
-        # Setup matplotlib
-        fig = plt.figure(figsize=(12, 6))
+        # Setup matplotlib once
+        fig, ax = plt.subplots(figsize=(12, 6))
         plt.ion()
+        
+        # Setup plot properties once
+        ax.set_xlim(392, 20000)
+        ax.set_ylim(-1, 1)
+        ax.set_xscale('log')
+        ax.set_title('Detected Musical Note', fontsize=16)
+        ax.set_xlabel('Frequency (Hz)', fontsize=12)
+        ax.grid(True, alpha=0.3)
+        ax.set_yticks([])
+        
+        # Draw static reference lines once
+        # Chromatic scale reference lines (very light)
+        for freq in self.chromatic_freqs:
+            ax.axvline(x=freq, color='lightgray', linestyle='-', alpha=0.2, linewidth=0.5)
+        
+        # Natural notes with labels
+        for freq, name in zip(self.natural_freqs, self.natural_names):
+            ax.axvline(x=freq, color='gray', linestyle='--', alpha=0.4, linewidth=1)
+            ax.text(freq, 0.8, name, rotation=45, fontsize=10, alpha=0.6, ha='center')
+        
+        # Create dynamic elements that will be updated
+        detected_freq_line = ax.axvline(x=1000, color='blue', linestyle='-', alpha=0, linewidth=2)
+        detected_note_line = ax.axvline(x=1000, color='red', linestyle='-', alpha=0, linewidth=5)
+        note_text = ax.text(1000, 0, "", rotation=0, fontsize=24, color='red', weight='bold', 
+                           ha='center', va='center', alpha=0,
+                           bbox=dict(boxstyle="round,pad=0.3", facecolor="white", edgecolor="red"))
+        freq_text = ax.text(1000, -0.6, "", rotation=0, fontsize=14, color='red', 
+                           alpha=0, ha='center')
+        no_note_text = ax.text(1000, 0, "No Note Detected", fontsize=20, color='gray', 
+                              ha='center', va='center', alpha=0)
         
         print("Chromatic Note Visualizer started.")
         print("Close the plot window or press Ctrl+C to stop")
@@ -152,48 +182,44 @@ class ChromaticNoteVisualizer:
             while self.running and plt.get_fignums():
                 peak_freq, peak_mag = self._get_peak_frequency()
                 
-                # Clear and setup plot
-                plt.clf()
-                ax = plt.gca()
-                ax.set_xlim(392, 20000)
-                ax.set_ylim(-1, 1)
-                ax.set_xscale('log')
-                ax.set_title('Detected Musical Note', fontsize=16)
-                ax.set_xlabel('Frequency (Hz)', fontsize=12)
-                ax.grid(True, alpha=0.3)
-                ax.set_yticks([])
-                
-                # Draw chromatic scale reference lines
-                for freq in self.chromatic_freqs:
-                    ax.axvline(x=freq, color='lightgray', linestyle='-', alpha=0.2, linewidth=0.5)
-                
-                # Draw and label natural notes
-                for freq, name in zip(self.natural_freqs, self.natural_names):
-                    ax.axvline(x=freq, color='gray', linestyle='--', alpha=0.4, linewidth=1)
-                    ax.text(freq, 0.8, name, rotation=45, fontsize=10, alpha=0.6, ha='center')
-                
-                # Show detected note
                 if peak_freq is not None:
                     closest_freq, closest_name = self._find_closest_note(peak_freq)
                     if closest_freq is not None:
-                        # Blue line for actual frequency
-                        ax.axvline(x=peak_freq, color='blue', linestyle='-', alpha=0.4, linewidth=2)
+                        # Update detected frequency line
+                        detected_freq_line.set_xdata([peak_freq, peak_freq])
+                        detected_freq_line.set_alpha(0.4)
                         
-                        # Red line and label for closest note
-                        ax.axvline(x=closest_freq, color='red', linestyle='-', alpha=1.0, linewidth=5)
-                        ax.text(closest_freq, 0, closest_name, rotation=0, fontsize=24, 
-                               color='red', weight='bold', ha='center', va='center',
-                               bbox=dict(boxstyle="round,pad=0.3", facecolor="white", edgecolor="red"))
+                        # Update detected note line
+                        detected_note_line.set_xdata([closest_freq, closest_freq])
+                        detected_note_line.set_alpha(1.0)
                         
-                        # Show frequency and magnitude
-                        ax.text(closest_freq, -0.6, f'{peak_freq:.1f} Hz (peak: {peak_mag:.2f})', 
-                               rotation=0, fontsize=14, color='red', alpha=0.8, ha='center')
+                        # Update note text
+                        note_text.set_position((closest_freq, 0))
+                        note_text.set_text(closest_name)
+                        note_text.set_alpha(1.0)
+                        
+                        # Update frequency text
+                        freq_text.set_position((closest_freq, -0.6))
+                        freq_text.set_text(f'{peak_freq:.1f} Hz (peak: {peak_mag:.2f})')
+                        freq_text.set_alpha(0.8)
+                        
+                        # Hide "no note" text
+                        no_note_text.set_alpha(0)
                         
                         print(f"Detected: {closest_name} ({peak_freq:.1f} Hz, peak: {peak_mag:.2f})")
                 else:
-                    ax.text(1000, 0, "No Note Detected", fontsize=20, color='gray', 
-                           ha='center', va='center', alpha=0.7)
+                    # Hide detection elements
+                    detected_freq_line.set_alpha(0)
+                    detected_note_line.set_alpha(0)
+                    note_text.set_alpha(0)
+                    freq_text.set_alpha(0)
+                    
+                    # Show "no note" text
+                    no_note_text.set_alpha(0.7)
                 
+                # Efficient redraw - only update what changed
+                fig.canvas.draw_idle()
+                fig.canvas.flush_events()
                 plt.pause(self.update_rate_ms / 1000.0)
                 
         except KeyboardInterrupt:
