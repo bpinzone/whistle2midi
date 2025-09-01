@@ -19,7 +19,7 @@ def main():
 class FFTVisualizer:
     """Real-time FFT spectrum visualizer using librosa"""
     
-    def __init__(self, buffer_size=4096, update_rate_ms=8, sample_rate=44100, n_fft=4096):
+    def __init__(self, buffer_size=4096, update_rate_ms=4, sample_rate=44100, n_fft=4096):
         self.buffer_size = buffer_size
         self.update_rate_ms = update_rate_ms
         self.sample_rate = sample_rate
@@ -140,33 +140,56 @@ class FFTVisualizer:
 class PeakFFTVisualizer:
     """Real-time FFT spectrum visualizer showing only the N highest peaks"""
     
-    def __init__(self, buffer_size=4096, update_rate_ms=8, sample_rate=44100, n_fft=4096, n_peaks=10):
+    def __init__(self, buffer_size=4096, update_rate_ms=4, sample_rate=44100, n_fft=4096, n_peaks=10):
         self.buffer_size = buffer_size
         self.update_rate_ms = update_rate_ms
         self.sample_rate = sample_rate
         self.n_fft = n_fft
         self.n_peaks = n_peaks  # Number of peaks to show
-        self.audio_buffer = np.zeros(buffer_size)
+        self.audio_buffer = np.zeros(buffer_size, dtype=np.float32)  # Use float32 for speed
         self.buffer_lock = threading.Lock()
         self.running = False
+        
+        # Pre-allocate arrays for performance
+        self.windowed_data = np.zeros(n_fft, dtype=np.float32)
+        self.fft_result = np.zeros(n_fft//2 + 1, dtype=np.complex64)  # Pre-allocated FFT result
+        self.magnitude = np.zeros(n_fft//2 + 1, dtype=np.float32)
+        self.hanning_window = np.hanning(n_fft).astype(np.float32)  # Pre-computed window
         
         # Setup matplotlib for frequency domain
         self.fig, (self.ax1, self.ax2) = plt.subplots(2, 1, figsize=(12, 8))
         plt.ion()
         
-        # Create frequency bins for x-axis
-        self.freqs = np.fft.rfftfreq(n_fft, 1/sample_rate)
+        # Create frequency bins for x-axis (pre-computed)
+        self.freqs = np.fft.rfftfreq(n_fft, 1/sample_rate).astype(np.float32)
         # Limit to frequencies above G4 (392 Hz) up to 20 kHz
         self.freq_mask = (self.freqs >= 392) & (self.freqs <= 20000)
         self.display_freqs = self.freqs[self.freq_mask]
+        self.n_display_freqs = len(self.display_freqs)
         
-        # Pre-create plot lines for efficiency
+        # Pre-allocate spectrum arrays
+        self.spectrum_full = np.zeros(len(self.freqs), dtype=np.float32)
+        self.spectrum_display = np.zeros(self.n_display_freqs, dtype=np.float32)
+        
+        # Pre-create plot elements
         self.waveform_line, = self.ax1.plot([], [], 'b-', linewidth=1)
-        # For peaks, we'll use scatter plot to show individual points
-        self.peaks_scatter = self.ax2.scatter([], [], c='red', s=50, alpha=0.8)
+        self.x_waveform = np.arange(buffer_size, dtype=np.float32)  # Pre-computed x-axis
         
         # Setup axes once
         self._setup_axes()
+        
+        # Pre-compute musical note data for faster plotting
+        self._setup_note_markers()
+    
+    def _setup_note_markers(self):
+        """Pre-compute musical note marker data"""
+        note_freqs = np.array([392, 523.3, 659.3, 783.9, 1047, 1319, 1568, 2093, 2637, 3136, 4186], dtype=np.float32)
+        note_names = ['G4', 'C5', 'E5', 'G5', 'C6', 'E6', 'G6', 'C7', 'E7', 'G7', 'C8']
+        
+        # Filter notes within our frequency range
+        valid_mask = (note_freqs >= 392) & (note_freqs <= 20000)
+        self.note_freqs = note_freqs[valid_mask]
+        self.note_names = [note_names[i] for i in range(len(note_names)) if valid_mask[i]]
     
     def _setup_axes(self):
         """Setup plot axes once for efficiency"""
@@ -187,15 +210,6 @@ class PeakFFTVisualizer:
         self.ax2.set_ylabel('Magnitude (log10)')
         self.ax2.grid(True, alpha=0.3)
         
-        # Add frequency labels for musical notes (G4 and above)
-        note_freqs = [392, 523.3, 659.3, 783.9, 1047, 1319, 1568, 2093, 2637, 3136, 4186]
-        note_names = ['G4', 'C5', 'E5', 'G5', 'C6', 'E6', 'G6', 'C7', 'E7', 'G7', 'C8']
-        
-        for freq, name in zip(note_freqs, note_names):
-            if 392 <= freq <= 20000:
-                self.ax2.axvline(x=freq, color='gray', linestyle='--', alpha=0.5)
-                self.ax2.text(freq, 4, name, rotation=45, fontsize=8, alpha=0.7)
-        
         plt.tight_layout()
     
     def set_n_peaks(self, n_peaks):
@@ -203,44 +217,88 @@ class PeakFFTVisualizer:
         self.n_peaks = n_peaks
         self.ax2.set_title(f'Top {self.n_peaks} FFT Peaks')
     
+    def get_current_peaks(self, n_peaks=3):
+        """Get the current top N peaks from the audio buffer - optimized version"""
+        with self.buffer_lock:
+            # Copy only what we need
+            if len(self.audio_buffer) >= self.n_fft:
+                self.windowed_data[:] = self.audio_buffer[-self.n_fft:] * self.hanning_window
+            else:
+                self.windowed_data[:len(self.audio_buffer)] = self.audio_buffer * self.hanning_window[:len(self.audio_buffer)]
+                self.windowed_data[len(self.audio_buffer):] = 0
+        
+        # Optimized FFT computation
+        np.fft.rfft(self.windowed_data, n=self.n_fft, out=self.fft_result)
+        np.abs(self.fft_result, out=self.magnitude)
+        
+        # Use log scaling with pre-allocated arrays
+        np.maximum(self.magnitude, 1e-10, out=self.magnitude)
+        np.log10(self.magnitude, out=self.spectrum_full)
+        
+        # Extract display frequencies
+        self.spectrum_display[:] = self.spectrum_full[self.freq_mask]
+        
+        # Get top N peaks efficiently
+        if n_peaks >= self.n_display_freqs:
+            peak_indices = np.arange(self.n_display_freqs)
+        else:
+            peak_indices = np.argpartition(self.spectrum_display, -n_peaks)[-n_peaks:]
+        
+        peak_freqs = self.display_freqs[peak_indices]
+        peak_mags = self.spectrum_display[peak_indices]
+        
+        # Sort by magnitude (highest first)
+        sorted_indices = np.argsort(peak_mags)[::-1]
+        return peak_freqs[sorted_indices], peak_mags[sorted_indices]
+    
     def update_audio_data(self, audio_samples):
-        """Update the audio buffer with new samples (thread-safe)"""
+        """Update the audio buffer with new samples (thread-safe) - optimized"""
         with self.buffer_lock:
             shift_amount = len(audio_samples)
+            # Use efficient array operations
             self.audio_buffer[:-shift_amount] = self.audio_buffer[shift_amount:]
-            self.audio_buffer[-shift_amount:] = audio_samples
+            self.audio_buffer[-shift_amount:] = audio_samples.astype(np.float32)
     
-    def _compute_fft_spectrum(self, audio_data):
-        """Compute FFT spectrum efficiently using numpy"""
-        # Use windowing for better frequency resolution
-        windowed_data = audio_data * np.hanning(len(audio_data))
+    def _compute_fft_spectrum_optimized(self):
+        """Optimized FFT spectrum computation using pre-allocated arrays"""
+        # Use pre-allocated windowed data
+        if len(self.audio_buffer) >= self.n_fft:
+            self.windowed_data[:] = self.audio_buffer[-self.n_fft:] * self.hanning_window
+        else:
+            self.windowed_data[:len(self.audio_buffer)] = self.audio_buffer * self.hanning_window[:len(self.audio_buffer)]
+            self.windowed_data[len(self.audio_buffer):] = 0
         
-        # Compute FFT using numpy
-        fft = np.fft.rfft(windowed_data, n=self.n_fft)
+        # Optimized FFT with pre-allocated output
+        np.fft.rfft(self.windowed_data, n=self.n_fft, out=self.fft_result)
+        np.abs(self.fft_result, out=self.magnitude)
         
-        # Get magnitude spectrum
-        magnitude = np.abs(fft)
+        # Optimized log scaling
+        np.maximum(self.magnitude, 1e-10, out=self.magnitude)
+        np.log10(self.magnitude, out=self.spectrum_full)
         
-        # Use log scaling
-        magnitude_log = np.log10(np.maximum(magnitude, 1e-10))
-        
-        return magnitude_log[self.freq_mask]
+        # Extract display range efficiently
+        self.spectrum_display[:] = self.spectrum_full[self.freq_mask]
+        return self.spectrum_display
     
-    def _find_top_peaks(self, spectrum):
-        """Find the N highest peaks in the spectrum"""
-        # Get the indices of the N highest values
-        peak_indices = np.argsort(spectrum)[-self.n_peaks:]
+    def _find_top_peaks_optimized(self, spectrum, n_peaks):
+        """Optimized peak finding using argpartition"""
+        if n_peaks >= len(spectrum):
+            peak_indices = np.arange(len(spectrum))
+        else:
+            # argpartition is faster than argsort for finding top N
+            peak_indices = np.argpartition(spectrum, -n_peaks)[-n_peaks:]
         
-        # Get corresponding frequencies and magnitudes
         peak_freqs = self.display_freqs[peak_indices]
         peak_mags = spectrum[peak_indices]
         
-        return peak_freqs, peak_mags
+        # Sort by magnitude (highest first)
+        sorted_indices = np.argsort(peak_mags)[::-1]
+        return peak_freqs[sorted_indices], peak_mags[sorted_indices]
     
     def start_visualization(self):
-        """Start the real-time peak FFT visualization loop"""
+        """Start the real-time peak FFT visualization loop - optimized"""
         self.running = True
-        print(f"Peak FFT Visualization started (showing top {self.n_peaks} peaks). Close the plot window to stop.")
+        print(f"Optimized Peak FFT Visualization started (showing top {self.n_peaks} peaks). Close the plot window to stop.")
         
         try:
             while self.running and plt.get_fignums():
@@ -248,21 +306,20 @@ class PeakFFTVisualizer:
                 with self.buffer_lock:
                     current_buffer = self.audio_buffer.copy()
                 
-                # Compute FFT spectrum
-                spectrum = self._compute_fft_spectrum(current_buffer)
+                # Optimized spectrum computation
+                spectrum = self._compute_fft_spectrum_optimized()
                 
-                # Find top N peaks
-                peak_freqs, peak_mags = self._find_top_peaks(spectrum)
+                # Optimized peak finding
+                peak_freqs, peak_mags = self._find_top_peaks_optimized(spectrum, self.n_peaks)
                 
-                # Update waveform plot
-                x_waveform = np.arange(len(current_buffer))
-                self.waveform_line.set_data(x_waveform, current_buffer)
+                # Update waveform plot efficiently
+                self.waveform_line.set_data(self.x_waveform, current_buffer)
                 
-                # Update peaks plot - clear and redraw scatter points
+                # Optimized peaks plot update - minimize clear operations
                 self.ax2.clear()
                 self.ax2.scatter(peak_freqs, peak_mags, c='red', s=10, alpha=0.8, zorder=5)
                 
-                # Re-setup the cleared axis
+                # Batch set axis properties
                 self.ax2.set_xlim(392, 20000)
                 self.ax2.set_ylim(-10, 5)
                 self.ax2.set_xscale('log')
@@ -271,23 +328,20 @@ class PeakFFTVisualizer:
                 self.ax2.set_ylabel('Magnitude (log10)')
                 self.ax2.grid(True, alpha=0.3)
                 
-                # Re-add musical note markers
-                note_freqs = [392, 523.3, 659.3, 783.9, 1047, 1319, 1568, 2093, 2637, 3136, 4186]
-                note_names = ['G4', 'C5', 'E5', 'G5', 'C6', 'E6', 'G6', 'C7', 'E7', 'G7', 'C8']
-                for freq, name in zip(note_freqs, note_names):
-                    if 392 <= freq <= 20000:
-                        self.ax2.axvline(x=freq, color='gray', linestyle='--', alpha=0.5)
-                        self.ax2.text(freq, 4, name, rotation=45, fontsize=8, alpha=0.7)
+                # Efficiently add note markers
+                for freq, name in zip(self.note_freqs, self.note_names):
+                    self.ax2.axvline(x=freq, color='gray', linestyle='--', alpha=0.5)
+                    self.ax2.text(freq, 4, name, rotation=45, fontsize=8, alpha=0.7)
                 
-                # Redraw
-                self.fig.canvas.draw()
+                # Optimized redraw
+                self.fig.canvas.draw_idle()  # Use draw_idle for better performance
                 self.fig.canvas.flush_events()
                 
                 # Refresh the plot
                 plt.pause(self.update_rate_ms / 1000.0)
                 
         except KeyboardInterrupt:
-            print("\nPeak FFT Visualization stopped by user.")
+            print("\nOptimized Peak FFT Visualization stopped by user.")
         finally:
             self.stop_visualization()
     
@@ -301,9 +355,9 @@ class PeakFFTVisualizer:
 def demo_mic_with_fft_visualization():
     """Demo function combining microphone input with real-time FFT visualization"""
     
-    # Create FFT visualizer and microphone input with very fast updates
-    fft_visualizer = FFTVisualizer(buffer_size=4096, update_rate_ms=8, sample_rate=44100, n_fft=4096)  # ~125 FPS
-    mic_input = MicrophoneInput(samplerate=44100, channels=1, blocksize=256)  # Very small blocks for ultra-low latency
+    # Create FFT visualizer and microphone input with ultra-fast updates
+    fft_visualizer = FFTVisualizer(buffer_size=4096, update_rate_ms=4, sample_rate=44100, n_fft=4096)  # 250 FPS!
+    mic_input = MicrophoneInput(samplerate=44100, channels=1, blocksize=128)  # Ultra-low latency
     
     # Connect microphone to FFT visualizer
     mic_input.set_audio_callback(fft_visualizer.update_audio_data)
@@ -327,33 +381,63 @@ def demo_mic_with_fft_visualization():
 def demo_mic_with_peak_fft_visualization(n_peaks=10):
     """Demo function combining microphone input with real-time peak FFT visualization"""
     
-    # Create peak FFT visualizer and microphone input
-    peak_visualizer = PeakFFTVisualizer(buffer_size=4096, update_rate_ms=8, sample_rate=44100, n_fft=4096, n_peaks=n_peaks)
-    mic_input = MicrophoneInput(samplerate=44100, channels=1, blocksize=256)
+    global peak_visualizer_instance  # Make it globally accessible
+    
+    # Create peak FFT visualizer and microphone input with ultra-fast updates
+    peak_visualizer_instance = PeakFFTVisualizer(buffer_size=4096, update_rate_ms=4, sample_rate=44100, n_fft=4096, n_peaks=n_peaks)  # 250 FPS!
+    mic_input = MicrophoneInput(samplerate=44100, channels=1, blocksize=128)  # Ultra-low latency
     
     # Connect microphone to peak visualizer
-    mic_input.set_audio_callback(peak_visualizer.update_audio_data)
+    mic_input.set_audio_callback(peak_visualizer_instance.update_audio_data)
     
     print(f"Starting microphone input with real-time peak FFT visualization (showing top {n_peaks} peaks)...")
     print("Close the plot window or press Ctrl+C to stop")
+    print("You can now call get_top_peaks() from anywhere to get the current top 3 peaks")
     
     try:
         with mic_input:
             # Start peak visualization (this will block until stopped)
-            peak_visualizer.start_visualization()
+            peak_visualizer_instance.start_visualization()
             
     except KeyboardInterrupt:
         print("\nPeak FFT Demo stopped by user.")
     except Exception as e:
         print(f"Error: {e}")
     finally:
-        peak_visualizer.stop_visualization()
+        peak_visualizer_instance.stop_visualization()
+
+
+# Global convenience function to get current peaks
+def get_top_peaks(n_peaks=3):
+    """Convenience function to get the current top N peaks from the running visualizer
+    
+    Args:
+        n_peaks (int): Number of top peaks to return (default: 3)
+        
+    Returns:
+        tuple: (frequencies, magnitudes) - arrays of the top N peaks
+               frequencies in Hz, magnitudes in log10 scale
+               Returns (None, None) if no visualizer is running
+    """
+    try:
+        if 'peak_visualizer_instance' in globals() and peak_visualizer_instance is not None:
+            return peak_visualizer_instance.get_current_peaks(n_peaks)
+        else:
+            print("No peak visualizer is currently running. Start it with demo_mic_with_peak_fft_visualization()")
+            return None, None
+    except Exception as e:
+        print(f"Error getting peaks: {e}")
+        return None, None
+
+
+# Initialize global variable
+peak_visualizer_instance = None
 
 
 class AudioVisualizer:
     """Real-time audio waveform visualizer"""
     
-    def __init__(self, buffer_size=2048, update_rate_ms=50):
+    def __init__(self, buffer_size=2048, update_rate_ms=4):
         self.buffer_size = buffer_size
         self.update_rate_ms = update_rate_ms
         self.audio_buffer = np.zeros(buffer_size)
@@ -465,9 +549,9 @@ class MicrophoneInput:
 def demo_mic_with_visualization():
     """Demo function combining microphone input with real-time visualization"""
     
-    # Create visualizer and microphone input with faster refresh rate
-    visualizer = AudioVisualizer(buffer_size=2048, update_rate_ms=20)  # Faster refresh: 50 FPS
-    mic_input = MicrophoneInput(samplerate=44100, channels=1, blocksize=1024)
+    # Create visualizer and microphone input with ultra-fast refresh rate
+    visualizer = AudioVisualizer(buffer_size=2048, update_rate_ms=4)  # Ultra-fast refresh: 250 FPS!
+    mic_input = MicrophoneInput(samplerate=44100, channels=1, blocksize=128)  # Ultra-low latency
     
     # Connect microphone to visualizer
     mic_input.set_audio_callback(visualizer.update_audio_data)
