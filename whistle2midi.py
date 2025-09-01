@@ -64,14 +64,45 @@ class FFTVisualizer:
         self.ax2.set_ylabel('Magnitude (log10)')
         self.ax2.grid(True, alpha=0.3)
         
-        # Add frequency labels for musical notes (G4 and above)
-        note_freqs = [392, 523.3, 659.3, 783.9, 1047, 1319, 1568, 2093, 2637, 3136, 4186]
-        note_names = ['G4', 'C5', 'E5', 'G5', 'C6', 'E6', 'G6', 'C7', 'E7', 'G7', 'C8']
+        # Generate full chromatic scale markers (G4 and above)
+        note_names_chromatic = ['G', 'G#', 'A', 'A#', 'B', 'C', 'C#', 'D', 'D#', 'E', 'F', 'F#']
+        semitone_ratio = 2**(1/12)
+        base_freq = 392.0  # G4
+        base_octave = 4
         
-        for freq, name in zip(note_freqs, note_names):
-            if 392 <= freq <= 20000:
-                self.ax2.axvline(x=freq, color='gray', linestyle='--', alpha=0.5)
-                self.ax2.text(freq, 4, name, rotation=45, fontsize=8, alpha=0.7)
+        # Generate all chromatic notes
+        all_freqs = []
+        major_freqs = []
+        major_names = []
+        
+        current_freq = base_freq
+        octave = base_octave
+        note_index = 0
+        
+        while current_freq <= 20000:
+            all_freqs.append(current_freq)
+            note_name = note_names_chromatic[note_index]
+            full_name = f"{note_name}{octave}"
+            
+            # Add to major notes if it's a natural note (no sharp)
+            if '#' not in note_name:
+                major_freqs.append(current_freq)
+                major_names.append(full_name)
+            
+            current_freq *= semitone_ratio
+            note_index += 1
+            if note_index >= len(note_names_chromatic):
+                note_index = 0
+                octave += 1
+        
+        # Draw all chromatic scale lines (light)
+        for freq in all_freqs:
+            self.ax2.axvline(x=freq, color='lightgray', linestyle='-', alpha=0.3, linewidth=0.5)
+        
+        # Draw and label major notes (darker)
+        for freq, name in zip(major_freqs, major_names):
+            self.ax2.axvline(x=freq, color='gray', linestyle='--', alpha=0.7, linewidth=1)
+            self.ax2.text(freq, 4, name, rotation=45, fontsize=8, alpha=0.8)
         
         plt.tight_layout()
     
@@ -182,14 +213,53 @@ class PeakFFTVisualizer:
         self._setup_note_markers()
     
     def _setup_note_markers(self):
-        """Pre-compute musical note marker data"""
-        note_freqs = np.array([392, 523.3, 659.3, 783.9, 1047, 1319, 1568, 2093, 2637, 3136, 4186], dtype=np.float32)
-        note_names = ['G4', 'C5', 'E5', 'G5', 'C6', 'E6', 'G6', 'C7', 'E7', 'G7', 'C8']
+        """Pre-compute musical note marker data for full chromatic scale"""
+        # Generate chromatic scale frequencies starting from G4 (392 Hz)
+        # Each octave multiplies frequency by 2, each semitone by 2^(1/12)
         
-        # Filter notes within our frequency range
-        valid_mask = (note_freqs >= 392) & (note_freqs <= 20000)
-        self.note_freqs = note_freqs[valid_mask]
-        self.note_names = [note_names[i] for i in range(len(note_names)) if valid_mask[i]]
+        note_names_chromatic = ['G', 'G#', 'A', 'A#', 'B', 'C', 'C#', 'D', 'D#', 'E', 'F', 'F#']
+        semitone_ratio = 2**(1/12)  # Frequency ratio between semitones
+        
+        # Start with G4 = 392 Hz
+        base_freq = 392.0  # G4
+        base_octave = 4
+        
+        frequencies = []
+        names = []
+        
+        # Generate notes up to 20 kHz
+        current_freq = base_freq
+        octave = base_octave
+        note_index = 0  # Start with G
+        
+        while current_freq <= 20000:
+            # Add current note
+            frequencies.append(current_freq)
+            note_name = note_names_chromatic[note_index]
+            names.append(f"{note_name}{octave}")
+            
+            # Move to next semitone
+            current_freq *= semitone_ratio
+            note_index += 1
+            
+            # Handle octave change (after B, next is C of next octave)
+            if note_index >= len(note_names_chromatic):
+                note_index = 0
+                octave += 1
+        
+        # Convert to numpy arrays for efficiency
+        self.note_freqs = np.array(frequencies, dtype=np.float32)
+        self.note_names = names
+        
+        # Create two sets: major notes (for labels) and all notes (for lines)
+        major_note_indices = []
+        for i, name in enumerate(names):
+            # Show labels only for natural notes (no sharps/flats)
+            if '#' not in name:
+                major_note_indices.append(i)
+        
+        self.major_note_freqs = self.note_freqs[major_note_indices]
+        self.major_note_names = [names[i] for i in major_note_indices]
     
     def _setup_axes(self):
         """Setup plot axes once for efficiency"""
@@ -328,10 +398,14 @@ class PeakFFTVisualizer:
                 self.ax2.set_ylabel('Magnitude (log10)')
                 self.ax2.grid(True, alpha=0.3)
                 
-                # Efficiently add note markers
-                for freq, name in zip(self.note_freqs, self.note_names):
-                    self.ax2.axvline(x=freq, color='gray', linestyle='--', alpha=0.5)
-                    self.ax2.text(freq, 4, name, rotation=45, fontsize=8, alpha=0.7)
+                # Add all chromatic scale vertical lines
+                for freq in self.note_freqs:
+                    self.ax2.axvline(x=freq, color='lightgray', linestyle='-', alpha=0.3, linewidth=0.5)
+                
+                # Add labels only for major notes (natural notes)
+                for freq, name in zip(self.major_note_freqs, self.major_note_names):
+                    self.ax2.axvline(x=freq, color='gray', linestyle='--', alpha=0.7, linewidth=1)
+                    self.ax2.text(freq, 4, name, rotation=45, fontsize=8, alpha=0.8)
                 
                 # Optimized redraw
                 self.fig.canvas.draw_idle()  # Use draw_idle for better performance
