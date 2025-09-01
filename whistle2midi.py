@@ -33,8 +33,8 @@ class FFTVisualizer:
         
         # Create frequency bins for x-axis
         self.freqs = np.fft.rfftfreq(n_fft, 1/sample_rate)  # Use numpy for efficiency
-        # Limit to human hearing range (20 Hz - 20 kHz)
-        self.freq_mask = (self.freqs >= 20) & (self.freqs <= 20000)
+        # Limit to frequencies above G4 (392 Hz) up to 20 kHz
+        self.freq_mask = (self.freqs >= 392) & (self.freqs <= 20000)
         self.display_freqs = self.freqs[self.freq_mask]
         
         # Pre-create plot lines for efficiency
@@ -55,22 +55,22 @@ class FFTVisualizer:
         self.ax1.grid(True, alpha=0.3)
         
         # Spectrum plot setup
-        self.ax2.set_xlim(20, 20000)
-        self.ax2.set_ylim(-60, 20)  # More reasonable dB range
+        self.ax2.set_xlim(392, 20000)  # Start from G4 (392 Hz)
+        self.ax2.set_ylim(-30, 60)  # More reasonable dB range
         self.ax2.set_xscale('log')
         self.ax2.set_title('Real-time FFT Spectrum')
         self.ax2.set_xlabel('Frequency (Hz)')
         self.ax2.set_ylabel('Magnitude (dB)')
         self.ax2.grid(True, alpha=0.3)
         
-        # Add frequency labels for musical notes
-        note_freqs = [82.4, 110, 146.8, 196, 261.6, 329.6, 392, 523.3, 659.3, 783.9, 1047, 1319, 1568]
-        note_names = ['E2', 'A2', 'D3', 'G3', 'C4', 'E4', 'G4', 'C5', 'E5', 'G5', 'C6', 'E6', 'G6']
+        # Add frequency labels for musical notes (G4 and above)
+        note_freqs = [392, 523.3, 659.3, 783.9, 1047, 1319, 1568, 2093, 2637, 3136, 4186]
+        note_names = ['G4', 'C5', 'E5', 'G5', 'C6', 'E6', 'G6', 'C7', 'E7', 'G7', 'C8']
         
         for freq, name in zip(note_freqs, note_names):
-            if 20 <= freq <= 20000:
+            if 392 <= freq <= 20000:
                 self.ax2.axvline(x=freq, color='gray', linestyle='--', alpha=0.5)
-                self.ax2.text(freq, 15, name, rotation=45, fontsize=8, alpha=0.7)
+                self.ax2.text(freq, 50, name, rotation=45, fontsize=8, alpha=0.7)
         
         plt.tight_layout()
     
