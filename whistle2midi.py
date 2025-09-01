@@ -56,11 +56,11 @@ class FFTVisualizer:
         
         # Spectrum plot setup
         self.ax2.set_xlim(392, 20000)  # Start from G4 (392 Hz)
-        self.ax2.set_ylim(-30, 60)  # More reasonable dB range
+        self.ax2.set_ylim(-10, 5)  # Log scale range
         self.ax2.set_xscale('log')
         self.ax2.set_title('Real-time FFT Spectrum')
         self.ax2.set_xlabel('Frequency (Hz)')
-        self.ax2.set_ylabel('Magnitude (dB)')
+        self.ax2.set_ylabel('Magnitude (log10)')
         self.ax2.grid(True, alpha=0.3)
         
         # Add frequency labels for musical notes (G4 and above)
@@ -70,7 +70,7 @@ class FFTVisualizer:
         for freq, name in zip(note_freqs, note_names):
             if 392 <= freq <= 20000:
                 self.ax2.axvline(x=freq, color='gray', linestyle='--', alpha=0.5)
-                self.ax2.text(freq, 50, name, rotation=45, fontsize=8, alpha=0.7)
+                self.ax2.text(freq, 4, name, rotation=45, fontsize=8, alpha=0.7)
         
         plt.tight_layout()
     
@@ -92,10 +92,10 @@ class FFTVisualizer:
         # Get magnitude spectrum
         magnitude = np.abs(fft)
         
-        # Convert to dB scale with fixed reference (more stable than np.max)
-        magnitude_db = 20 * np.log10(np.maximum(magnitude, 1e-10))  # Avoid log(0)
+        # Use log scaling instead of dB scaling
+        magnitude_log = np.log10(np.maximum(magnitude, 1e-10))  # Avoid log(0)
         
-        return magnitude_db[self.freq_mask]
+        return magnitude_log[self.freq_mask]
     
     def start_visualization(self):
         """Start the real-time FFT visualization loop"""
