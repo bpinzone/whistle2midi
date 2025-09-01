@@ -7,7 +7,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import threading
 
-draw = True
+draw = False
 
 
 def main():
@@ -180,19 +180,12 @@ class ChromaticNoteVisualizer:
         print("Chromatic Note Visualizer started.")
         print("Close the plot window or press Ctrl+C to stop")
         
-        loop_start = None
-        last_loop_start = None
+        detection_time = time.time()
+        last_detection_time = detection_time
         try:
             while self.running and plt.get_fignums():
-                last_loop_start = loop_start
-                loop_start = time.time()
-
-                if last_loop_start is not None:
-                    between_loop_time = loop_start - last_loop_start
-                    # print(f"Between loop time: {between_loop_time:.5f}s")
 
                 peak_freq, peak_mag = self._get_peak_frequency()
-                peak_attained_time = time.time()
                 
                 if peak_freq is not None:
                     closest_freq, closest_name = self._find_closest_note(peak_freq)
@@ -217,10 +210,13 @@ class ChromaticNoteVisualizer:
                         
                         # Hide "no note" text
                         no_note_text.set_alpha(0)
-                        loop_time = time.time() - loop_start
-                        peak_compute_time = peak_attained_time - loop_start
-                        
-                        print(f"Detected: {closest_name} ({peak_freq:.1f} Hz, peak: {peak_mag:.2f}), loop time: {loop_time:.5f}s, peak compute time: {peak_compute_time:.5f}s")
+
+                        last_detection_time = detection_time
+                        detection_time = time.time()
+                        time_between_detections = detection_time - last_detection_time
+                        time_between_detections_ms = time_between_detections * 1000
+
+                        print(f"Detected: {closest_name} ({peak_freq:.1f} Hz, peak: {peak_mag:.2f}) between_detection_time: {time_between_detections_ms:.3f}ms")
                 else:
                     # Hide detection elements
                     detected_freq_line.set_alpha(0)
