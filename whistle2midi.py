@@ -9,50 +9,39 @@ import threading
 
 
 def main():
-    # send_simple_note()
-    sound_device_demo()
+    demo_mic_with_visualization()
 
-def sound_device_demo():
-    """Demo function showing real-time microphone input with simple waveform plotting"""
+class AudioVisualizer:
+    """Real-time audio waveform visualizer"""
     
-    # Shared audio buffer between threads
-    buffer_size = 2048  # Show about 0.05 seconds at 44100 Hz
-    audio_buffer = np.zeros(buffer_size)
-    buffer_lock = threading.Lock()
+    def __init__(self, buffer_size=2048, update_rate_ms=50):
+        self.buffer_size = buffer_size
+        self.update_rate_ms = update_rate_ms
+        self.audio_buffer = np.zeros(buffer_size)
+        self.buffer_lock = threading.Lock()
+        self.running = False
+        
+        # Setup matplotlib
+        self.fig = plt.figure(figsize=(10, 6))
+        plt.ion()
     
-    def audio_callback(indata, frames, time, status):
-        nonlocal audio_buffer
-        if status:
-            print(f"Audio status: {status}")
-        
-        # Get mono audio samples
-        audio_samples = indata[:, 0]
-        
-        # Update the shared buffer (thread-safe)
-        with buffer_lock:
+    def update_audio_data(self, audio_samples):
+        """Update the audio buffer with new samples (thread-safe)"""
+        with self.buffer_lock:
             shift_amount = len(audio_samples)
-            audio_buffer[:-shift_amount] = audio_buffer[shift_amount:]
-            audio_buffer[-shift_amount:] = audio_samples
+            self.audio_buffer[:-shift_amount] = self.audio_buffer[shift_amount:]
+            self.audio_buffer[-shift_amount:] = audio_samples
     
-    print("Starting simple audio waveform plotting...")
-    print("Close the plot window or press Ctrl+C to stop")
-    
-    # Setup matplotlib in main thread
-    plt.figure(figsize=(10, 6))
-    plt.ion()
-    
-    try:
-        # Start audio stream
-        with sd.InputStream(callback=audio_callback, 
-                          channels=1,
-                          samplerate=44100,
-                          blocksize=1024):
-            
-            # Main plotting loop in main thread
-            while plt.get_fignums():
+    def start_visualization(self):
+        """Start the real-time visualization loop"""
+        self.running = True
+        print("Visualization started. Close the plot window to stop.")
+        
+        try:
+            while self.running and plt.get_fignums():
                 # Get current buffer data (thread-safe)
-                with buffer_lock:
-                    current_buffer = audio_buffer.copy()
+                with self.buffer_lock:
+                    current_buffer = self.audio_buffer.copy()
                 
                 # Update plot
                 plt.clf()
@@ -64,15 +53,100 @@ def sound_device_demo():
                 plt.grid(True, alpha=0.3)
                 
                 # Refresh the plot
-                plt.pause(0.05)  # Update every 50ms
+                plt.pause(self.update_rate_ms / 1000.0)
                 
+        except KeyboardInterrupt:
+            print("\nVisualization stopped by user.")
+        finally:
+            self.stop_visualization()
+    
+    def stop_visualization(self):
+        """Stop the visualization"""
+        self.running = False
+        plt.ioff()
+        plt.close('all')
+
+
+class MicrophoneInput:
+    """Microphone input handler"""
+    
+    def __init__(self, samplerate=44100, channels=1, blocksize=1024):
+        self.samplerate = samplerate
+        self.channels = channels
+        self.blocksize = blocksize
+        self.stream = None
+        self.callback_func = None
+    
+    def set_audio_callback(self, callback_func):
+        """Set the function to call when new audio data is available"""
+        self.callback_func = callback_func
+    
+    def _audio_callback(self, indata, frames, time, status):
+        """Internal audio callback"""
+        if status:
+            print(f"Audio status: {status}")
+        
+        # Get mono audio samples
+        audio_samples = indata[:, 0] if self.channels == 1 else indata
+        
+        # Call the user-defined callback if set
+        if self.callback_func:
+            self.callback_func(audio_samples)
+    
+    def start_stream(self):
+        """Start the audio input stream"""
+        if self.stream is None:
+            self.stream = sd.InputStream(
+                callback=self._audio_callback,
+                channels=self.channels,
+                samplerate=self.samplerate,
+                blocksize=self.blocksize
+            )
+            self.stream.start()
+            print(f"Audio stream started: {self.samplerate}Hz, {self.channels} channel(s)")
+    
+    def stop_stream(self):
+        """Stop the audio input stream"""
+        if self.stream:
+            self.stream.stop()
+            self.stream.close()
+            self.stream = None
+            print("Audio stream stopped.")
+    
+    def __enter__(self):
+        """Context manager entry"""
+        self.start_stream()
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager exit"""
+        self.stop_stream()
+
+
+def demo_mic_with_visualization():
+    """Demo function combining microphone input with real-time visualization"""
+    
+    # Create visualizer and microphone input
+    visualizer = AudioVisualizer(buffer_size=2048, update_rate_ms=50)
+    mic_input = MicrophoneInput(samplerate=44100, channels=1, blocksize=1024)
+    
+    # Connect microphone to visualizer
+    mic_input.set_audio_callback(visualizer.update_audio_data)
+    
+    print("Starting microphone input with real-time waveform visualization...")
+    print("Close the plot window or press Ctrl+C to stop")
+    
+    try:
+        with mic_input:
+            # Start visualization (this will block until stopped)
+            visualizer.start_visualization()
+            
     except KeyboardInterrupt:
-        print("\nAudio stream stopped.")
+        print("\nDemo stopped by user.")
     except Exception as e:
         print(f"Error: {e}")
     finally:
-        plt.ioff()
-        plt.close('all')
+        visualizer.stop_visualization()
 
 
 def send_simple_note():
