@@ -126,8 +126,8 @@ class MicrophoneInput:
 def demo_mic_with_visualization():
     """Demo function combining microphone input with real-time visualization"""
     
-    # Create visualizer and microphone input
-    visualizer = AudioVisualizer(buffer_size=2048, update_rate_ms=50)
+    # Create visualizer and microphone input with faster refresh rate
+    visualizer = AudioVisualizer(buffer_size=2048, update_rate_ms=20)  # Faster refresh: 50 FPS
     mic_input = MicrophoneInput(samplerate=44100, channels=1, blocksize=1024)
     
     # Connect microphone to visualizer
