@@ -18,7 +18,7 @@ def main():
 class FFTVisualizer:
     """Real-time FFT spectrum visualizer using librosa"""
     
-    def __init__(self, buffer_size=2048, update_rate_ms=50, sample_rate=44100, n_fft=2048):
+    def __init__(self, buffer_size=4096, update_rate_ms=8, sample_rate=44100, n_fft=4096):
         self.buffer_size = buffer_size
         self.update_rate_ms = update_rate_ms
         self.sample_rate = sample_rate
@@ -28,14 +28,51 @@ class FFTVisualizer:
         self.running = False
         
         # Setup matplotlib for frequency domain
-        self.fig = plt.figure(figsize=(12, 8))
+        self.fig, (self.ax1, self.ax2) = plt.subplots(2, 1, figsize=(12, 8))
         plt.ion()
         
         # Create frequency bins for x-axis
-        self.freqs = librosa.fft_frequencies(sr=sample_rate, n_fft=n_fft)
+        self.freqs = np.fft.rfftfreq(n_fft, 1/sample_rate)  # Use numpy for efficiency
         # Limit to human hearing range (20 Hz - 20 kHz)
         self.freq_mask = (self.freqs >= 20) & (self.freqs <= 20000)
         self.display_freqs = self.freqs[self.freq_mask]
+        
+        # Pre-create plot lines for efficiency
+        self.waveform_line, = self.ax1.plot([], [], 'b-', linewidth=1)
+        self.spectrum_line, = self.ax2.plot([], [], 'r-', linewidth=1)
+        
+        # Setup axes once
+        self._setup_axes()
+    
+    def _setup_axes(self):
+        """Setup plot axes once for efficiency"""
+        # Waveform plot setup
+        self.ax1.set_xlim(0, self.buffer_size)
+        self.ax1.set_ylim(-1, 1)
+        self.ax1.set_title('Real-time Audio Waveform')
+        self.ax1.set_xlabel('Sample Index')
+        self.ax1.set_ylabel('Amplitude')
+        self.ax1.grid(True, alpha=0.3)
+        
+        # Spectrum plot setup
+        self.ax2.set_xlim(20, 20000)
+        self.ax2.set_ylim(-60, 20)  # More reasonable dB range
+        self.ax2.set_xscale('log')
+        self.ax2.set_title('Real-time FFT Spectrum')
+        self.ax2.set_xlabel('Frequency (Hz)')
+        self.ax2.set_ylabel('Magnitude (dB)')
+        self.ax2.grid(True, alpha=0.3)
+        
+        # Add frequency labels for musical notes
+        note_freqs = [82.4, 110, 146.8, 196, 261.6, 329.6, 392, 523.3, 659.3, 783.9, 1047, 1319, 1568]
+        note_names = ['E2', 'A2', 'D3', 'G3', 'C4', 'E4', 'G4', 'C5', 'E5', 'G5', 'C6', 'E6', 'G6']
+        
+        for freq, name in zip(note_freqs, note_names):
+            if 20 <= freq <= 20000:
+                self.ax2.axvline(x=freq, color='gray', linestyle='--', alpha=0.5)
+                self.ax2.text(freq, 15, name, rotation=45, fontsize=8, alpha=0.7)
+        
+        plt.tight_layout()
     
     def update_audio_data(self, audio_samples):
         """Update the audio buffer with new samples (thread-safe)"""
@@ -45,28 +82,18 @@ class FFTVisualizer:
             self.audio_buffer[-shift_amount:] = audio_samples
     
     def _compute_fft_spectrum(self, audio_data):
-        """Compute FFT spectrum using librosa"""
-        if len(audio_data) < self.n_fft:
-            # Pad with zeros if not enough data
-            padded_data = np.pad(audio_data, (0, self.n_fft - len(audio_data)), 'constant')
-        else:
-            # Use the most recent n_fft samples
-            padded_data = audio_data[-self.n_fft:]
+        """Compute FFT spectrum efficiently using numpy"""
+        # Use windowing for better frequency resolution
+        windowed_data = audio_data * np.hanning(len(audio_data))
         
-        # Compute STFT using librosa
-        stft = librosa.stft(padded_data, n_fft=self.n_fft, hop_length=self.n_fft//4)
+        # Compute FFT using numpy (faster than librosa STFT for single frame)
+        fft = np.fft.rfft(windowed_data, n=self.n_fft)
         
         # Get magnitude spectrum
-        magnitude = np.abs(stft)
+        magnitude = np.abs(fft)
         
-        # Take the mean across time frames (if multiple frames)
-        if magnitude.shape[1] > 1:
-            magnitude = np.mean(magnitude, axis=1)
-        else:
-            magnitude = magnitude[:, 0]
-        
-        # Convert to dB scale
-        magnitude_db = librosa.amplitude_to_db(magnitude, ref=np.max)
+        # Convert to dB scale with fixed reference (more stable than np.max)
+        magnitude_db = 20 * np.log10(np.maximum(magnitude, 1e-10))  # Avoid log(0)
         
         return magnitude_db[self.freq_mask]
     
@@ -84,40 +111,15 @@ class FFTVisualizer:
                 # Compute FFT spectrum
                 spectrum = self._compute_fft_spectrum(current_buffer)
                 
-                # Update plot
-                plt.clf()
+                # Update plots efficiently (no plt.clf())
+                x_waveform = np.arange(len(current_buffer))
+                self.waveform_line.set_data(x_waveform, current_buffer)
+                self.spectrum_line.set_data(self.display_freqs, spectrum)
                 
-                # Create subplot layout
-                plt.subplot(2, 1, 1)
-                # Plot waveform
-                plt.plot(current_buffer, 'b-', linewidth=1)
-                plt.ylim(-1, 1)
-                plt.title('Real-time Audio Waveform')
-                plt.xlabel('Sample Index')
-                plt.ylabel('Amplitude')
-                plt.grid(True, alpha=0.3)
-                
-                plt.subplot(2, 1, 2)
-                # Plot FFT spectrum
-                plt.plot(self.display_freqs, spectrum, 'r-', linewidth=1)
-                plt.xlim(20, 20000)
-                plt.ylim(-80, 0)  # dB range
-                plt.xscale('log')  # Log scale for frequency
-                plt.title('Real-time FFT Spectrum')
-                plt.xlabel('Frequency (Hz)')
-                plt.ylabel('Magnitude (dB)')
-                plt.grid(True, alpha=0.3)
-                
-                # Add frequency labels for musical notes
-                note_freqs = [82.4, 110, 146.8, 196, 261.6, 329.6, 392, 523.3, 659.3, 783.9, 1047, 1319, 1568]
-                note_names = ['E2', 'A2', 'D3', 'G3', 'C4', 'E4', 'G4', 'C5', 'E5', 'G5', 'C6', 'E6', 'G6']
-                
-                for freq, name in zip(note_freqs, note_names):
-                    if 20 <= freq <= 20000:
-                        plt.axvline(x=freq, color='gray', linestyle='--', alpha=0.5)
-                        plt.text(freq, -5, name, rotation=45, fontsize=8, alpha=0.7)
-                
-                plt.tight_layout()
+                # Redraw only what changed
+                self.ax1.draw_artist(self.waveform_line)
+                self.ax2.draw_artist(self.spectrum_line)
+                self.fig.canvas.flush_events()
                 
                 # Refresh the plot
                 plt.pause(self.update_rate_ms / 1000.0)
@@ -137,9 +139,9 @@ class FFTVisualizer:
 def demo_mic_with_fft_visualization():
     """Demo function combining microphone input with real-time FFT visualization"""
     
-    # Create FFT visualizer and microphone input
-    fft_visualizer = FFTVisualizer(buffer_size=4096, update_rate_ms=50, sample_rate=44100, n_fft=2048)
-    mic_input = MicrophoneInput(samplerate=44100, channels=1, blocksize=1024)
+    # Create FFT visualizer and microphone input with very fast updates
+    fft_visualizer = FFTVisualizer(buffer_size=4096, update_rate_ms=8, sample_rate=44100, n_fft=4096)  # ~125 FPS
+    mic_input = MicrophoneInput(samplerate=44100, channels=1, blocksize=256)  # Very small blocks for ultra-low latency
     
     # Connect microphone to FFT visualizer
     mic_input.set_audio_callback(fft_visualizer.update_audio_data)
