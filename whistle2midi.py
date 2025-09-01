@@ -230,9 +230,20 @@ class ChromaticNoteVisualizer:
                     no_note_text.set_alpha(0.7)
                 
                 # Efficient redraw - only update what changed
+                draw_begin_time = time.time()
                 fig.canvas.draw_idle()
+                draw_end_time = time.time()
+                print(f"Draw time: {draw_end_time - draw_begin_time:.5f}s")
+
+                flush_begin_time = time.time()
                 fig.canvas.flush_events()
-                plt.pause(self.update_rate_ms / 1000.0)
+                flush_end_time = time.time()
+                print(f"Flush time: {flush_end_time - flush_begin_time:.5f}s")
+
+                pause_begin_time = time.time()
+                plt.pause(0.001)  # Minimum pause needed for GUI event loop
+                pause_end_time = time.time()
+                print(f"Pause time: {pause_end_time - pause_begin_time:.5f}s")
                 
         except KeyboardInterrupt:
             print("\nVisualization stopped.")
