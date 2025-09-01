@@ -14,6 +14,93 @@ def main():
     demo_mic_with_chromatic_note_visualization()
 
 
+def demo_mic_with_chromatic_note_visualization():
+    """Demo function for chromatic note detection"""
+    
+    # Create components
+    visualizer = ChromaticNoteVisualizer()
+    mic_input = MicrophoneInput()
+    
+    # Connect them
+    mic_input.set_audio_callback(visualizer.update_audio_data)
+    
+    print("Starting real-time chromatic note detection...")
+    print("The detected note will be highlighted in red")
+    print("Close the plot window or press Ctrl+C to stop")
+    
+    try:
+        with mic_input:
+            visualizer.start_visualization()
+    except KeyboardInterrupt:
+        print("\nDemo stopped.")
+    except Exception as e:
+        print(f"Error: {e}")
+
+
+def send_simple_note():
+    """Send simple MIDI notes"""
+    out = mido.open_output("Whistle2MIDI Out", virtual=True)
+
+    for i in range(100):
+        out.send(mido.Message('note_on', note=60, velocity=100))
+        time.sleep(0.5)
+        out.send(mido.Message('note_off', note=60))
+        time.sleep(1.0)
+
+    out.close()
+
+
+class MicrophoneInput:
+    """Microphone input handler"""
+    
+    def __init__(self, samplerate=44100, channels=1, blocksize=128):
+        self.samplerate = samplerate
+        self.channels = channels
+        self.blocksize = blocksize
+        self.stream = None
+        self.callback_func = None
+    
+    def set_audio_callback(self, callback_func):
+        """Set the function to call when new audio data is available"""
+        self.callback_func = callback_func
+    
+    def _audio_callback(self, indata, frames, time, status):
+        """Internal audio callback"""
+        if status:
+            print(f"Audio status: {status}")
+        
+        audio_samples = indata[:, 0] if self.channels == 1 else indata
+        if self.callback_func:
+            self.callback_func(audio_samples)
+    
+    def start_stream(self):
+        """Start the audio input stream"""
+        if self.stream is None:
+            self.stream = sd.InputStream(
+                callback=self._audio_callback,
+                channels=self.channels,
+                samplerate=self.samplerate,
+                blocksize=self.blocksize
+            )
+            self.stream.start()
+            print(f"Audio stream started: {self.samplerate}Hz")
+    
+    def stop_stream(self):
+        """Stop the audio input stream"""
+        if self.stream:
+            self.stream.stop()
+            self.stream.close()
+            self.stream = None
+            print("Audio stream stopped.")
+    
+    def __enter__(self):
+        self.start_stream()
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.stop_stream()
+
+
 class ChromaticNoteVisualizer:
     """Real-time chromatic note detection from microphone input"""
     
@@ -242,93 +329,6 @@ class ChromaticNoteVisualizer:
         self.running = False
         plt.ioff()
         plt.close('all')
-
-
-class MicrophoneInput:
-    """Microphone input handler"""
-    
-    def __init__(self, samplerate=44100, channels=1, blocksize=128):
-        self.samplerate = samplerate
-        self.channels = channels
-        self.blocksize = blocksize
-        self.stream = None
-        self.callback_func = None
-    
-    def set_audio_callback(self, callback_func):
-        """Set the function to call when new audio data is available"""
-        self.callback_func = callback_func
-    
-    def _audio_callback(self, indata, frames, time, status):
-        """Internal audio callback"""
-        if status:
-            print(f"Audio status: {status}")
-        
-        audio_samples = indata[:, 0] if self.channels == 1 else indata
-        if self.callback_func:
-            self.callback_func(audio_samples)
-    
-    def start_stream(self):
-        """Start the audio input stream"""
-        if self.stream is None:
-            self.stream = sd.InputStream(
-                callback=self._audio_callback,
-                channels=self.channels,
-                samplerate=self.samplerate,
-                blocksize=self.blocksize
-            )
-            self.stream.start()
-            print(f"Audio stream started: {self.samplerate}Hz")
-    
-    def stop_stream(self):
-        """Stop the audio input stream"""
-        if self.stream:
-            self.stream.stop()
-            self.stream.close()
-            self.stream = None
-            print("Audio stream stopped.")
-    
-    def __enter__(self):
-        self.start_stream()
-        return self
-    
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        self.stop_stream()
-
-
-def demo_mic_with_chromatic_note_visualization():
-    """Demo function for chromatic note detection"""
-    
-    # Create components
-    visualizer = ChromaticNoteVisualizer()
-    mic_input = MicrophoneInput()
-    
-    # Connect them
-    mic_input.set_audio_callback(visualizer.update_audio_data)
-    
-    print("Starting real-time chromatic note detection...")
-    print("The detected note will be highlighted in red")
-    print("Close the plot window or press Ctrl+C to stop")
-    
-    try:
-        with mic_input:
-            visualizer.start_visualization()
-    except KeyboardInterrupt:
-        print("\nDemo stopped.")
-    except Exception as e:
-        print(f"Error: {e}")
-
-
-def send_simple_note():
-    """Send simple MIDI notes"""
-    out = mido.open_output("Whistle2MIDI Out", virtual=True)
-
-    for i in range(100):
-        out.send(mido.Message('note_on', note=60, velocity=100))
-        time.sleep(0.5)
-        out.send(mido.Message('note_off', note=60))
-        time.sleep(1.0)
-
-    out.close()
 
 
 if __name__ == "__main__":
