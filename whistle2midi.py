@@ -428,7 +428,7 @@ class PeakFFTVisualizer:
 
 
 class ChromaticNoteVisualizer:
-    """Real-time FFT visualizer that highlights the closest chromatic note based on top 3 peaks average"""
+    """Real-time FFT visualizer that highlights the closest chromatic note based on the highest single peak"""
     
     def __init__(self, buffer_size=4096, update_rate_ms=4, sample_rate=44100, n_fft=4096):
         self.buffer_size = buffer_size
@@ -541,8 +541,8 @@ class ChromaticNoteVisualizer:
         
         return self.chromatic_freqs[closest_index], self.chromatic_names[closest_index]
     
-    def _get_top_3_peaks_average(self):
-        """Get the frequency-weighted average of the top 3 peaks"""
+    def _get_top_1_peak(self):
+        """Get the frequency of the single highest peak"""
         # Compute spectrum
         with self.buffer_lock:
             if len(self.audio_buffer) >= self.n_fft:
@@ -560,32 +560,19 @@ class ChromaticNoteVisualizer:
         # Extract display range
         self.spectrum_display[:] = self.spectrum_full[self.freq_mask]
         
-        # Find top 3 peaks
-        if len(self.spectrum_display) < 3:
-            return None, self.spectrum_display
+        # Find the single highest peak
+        if len(self.spectrum_display) < 1:
+            return None, None, self.spectrum_display
         
-        top_3_indices = np.argpartition(self.spectrum_display, -3)[-3:]
-        top_3_freqs = self.display_freqs[top_3_indices]
-        top_3_mags = self.spectrum_display[top_3_indices]
+        top_1_index = np.argmax(self.spectrum_display)
+        top_1_freq = self.display_freqs[top_1_index]
+        top_1_mag = self.spectrum_display[top_1_index]
         
-        # Check if all top 3 peaks are below threshold (0)
-        if np.all(top_3_mags < 0):
-            return None, self.spectrum_display
+        # Check if the peak is below threshold (0)
+        if top_1_mag < 0:
+            return None, None, self.spectrum_display
         
-        # Calculate weighted average frequency (weight by magnitude)
-        # Use only positive magnitudes for weighting
-        positive_mask = top_3_mags > 0
-        if not np.any(positive_mask):
-            return None, self.spectrum_display
-        
-        weights = top_3_mags[positive_mask]
-        freqs = top_3_freqs[positive_mask]
-        
-        # Normalize weights to sum to 1
-        weights = weights / np.sum(weights)
-        average_freq = np.sum(freqs * weights)
-        
-        return average_freq, self.spectrum_display
+        return top_1_freq, top_1_mag, self.spectrum_display
     
     def update_audio_data(self, audio_samples):
         """Update the audio buffer with new samples (thread-safe)"""
@@ -597,7 +584,7 @@ class ChromaticNoteVisualizer:
     def start_visualization(self):
         """Start the real-time chromatic note detection visualization"""
         self.running = True
-        print("Chromatic Note Visualizer started. Detecting closest note from top 3 peaks average.")
+        print("Chromatic Note Visualizer started. Detecting closest note from highest peak.")
         print("Close the plot window or press Ctrl+C to stop")
         
         try:
@@ -606,46 +593,59 @@ class ChromaticNoteVisualizer:
                 with self.buffer_lock:
                     current_buffer = self.audio_buffer.copy()
                 
-                average_freq, spectrum = self._get_top_3_peaks_average()
+                peak_freq, peak_mag, spectrum = self._get_top_1_peak()
                 
-                # Update waveform
-                self.waveform_line.set_data(self.x_waveform, current_buffer)
+                # Clear the entire figure
+                self.fig.clear()
                 
-                # Clear and redraw spectrum plot
-                self.ax2.clear()
-                self.ax2.plot(self.display_freqs, spectrum, 'b-', linewidth=1, alpha=0.7)
+                # Create a single large plot for note detection
+                ax = self.fig.add_subplot(1, 1, 1)
+                ax.set_xlim(392, 20000)
+                ax.set_ylim(-1, 1)  # Simple range for note display
+                ax.set_xscale('log')
+                ax.set_title('Detected Musical Note', fontsize=16)
+                ax.set_xlabel('Frequency (Hz)', fontsize=12)
+                ax.set_ylabel('Note Detection', fontsize=12)
+                ax.grid(True, alpha=0.3)
                 
-                # Reset axis properties
-                self.ax2.set_xlim(392, 20000)
-                self.ax2.set_ylim(-10, 5)
-                self.ax2.set_xscale('log')
-                self.ax2.set_title('FFT Spectrum with Detected Note')
-                self.ax2.set_xlabel('Frequency (Hz)')
-                self.ax2.set_ylabel('Magnitude (log10)')
-                self.ax2.grid(True, alpha=0.3)
-                
-                # Draw all chromatic scale lines (light)
+                # Draw all chromatic scale lines (very light)
                 for freq in self.chromatic_freqs:
-                    self.ax2.axvline(x=freq, color='lightgray', linestyle='-', alpha=0.3, linewidth=0.5)
+                    ax.axvline(x=freq, color='lightgray', linestyle='-', alpha=0.2, linewidth=0.5)
                 
-                # Draw natural notes (darker)
+                # Draw natural notes (light)
                 for freq, name in zip(self.natural_freqs, self.natural_names):
-                    self.ax2.axvline(x=freq, color='gray', linestyle='--', alpha=0.7, linewidth=1)
-                    self.ax2.text(freq, 4, name, rotation=45, fontsize=8, alpha=0.8)
+                    ax.axvline(x=freq, color='gray', linestyle='--', alpha=0.4, linewidth=1)
+                    ax.text(freq, 0.8, name, rotation=45, fontsize=10, alpha=0.6, ha='center')
                 
-                # Highlight detected note in red
-                if average_freq is not None:
-                    closest_freq, closest_name = self._find_closest_chromatic_note(average_freq)
+                # Highlight detected note in red (if any)
+                if peak_freq is not None:
+                    closest_freq, closest_name = self._find_closest_chromatic_note(peak_freq)
                     if closest_freq is not None:
-                        # Highlight the detected note
-                        self.ax2.axvline(x=closest_freq, color='red', linestyle='-', alpha=0.9, linewidth=3)
-                        self.ax2.text(closest_freq, -8, closest_name, rotation=45, fontsize=12, 
-                                    color='red', weight='bold', alpha=1.0)
+                        # Faint blue line for the actual detected frequency
+                        ax.axvline(x=peak_freq, color='blue', linestyle='-', alpha=0.4, linewidth=2)
                         
-                        # Add average frequency indicator
-                        self.ax2.axvline(x=average_freq, color='orange', linestyle=':', alpha=0.8, linewidth=2)
-                        self.ax2.text(average_freq, -6, f'{average_freq:.1f}Hz', rotation=45, 
-                                    fontsize=10, color='orange', alpha=0.9)
+                        # Large red highlight for the closest chromatic note
+                        ax.axvline(x=closest_freq, color='red', linestyle='-', alpha=1.0, linewidth=5)
+                        
+                        # Large red text for the detected note
+                        ax.text(closest_freq, 0, closest_name, rotation=0, fontsize=24, 
+                               color='red', weight='bold', alpha=1.0, ha='center', va='center',
+                               bbox=dict(boxstyle="round,pad=0.3", facecolor="white", edgecolor="red", alpha=0.9))
+                        
+                        # Show exact frequency and peak magnitude below
+                        ax.text(closest_freq, -0.6, f'{peak_freq:.1f} Hz (peak: {peak_mag:.2f})', rotation=0, 
+                               fontsize=14, color='red', alpha=0.8, ha='center')
+                        
+                        # Print to console as well
+                        print(f"Detected: {closest_name} ({peak_freq:.1f} Hz, peak: {peak_mag:.2f})")
+                else:
+                    # Show "No Note Detected" message
+                    ax.text(1000, 0, "No Note Detected", fontsize=20, color='gray', 
+                           ha='center', va='center', alpha=0.7,
+                           bbox=dict(boxstyle="round,pad=0.5", facecolor="lightgray", alpha=0.5))
+                
+                # Remove y-axis ticks since we're only showing note detection
+                ax.set_yticks([])
                 
                 # Redraw
                 self.fig.canvas.draw_idle()
@@ -678,7 +678,7 @@ def demo_mic_with_chromatic_note_visualization():
     mic_input.set_audio_callback(chromatic_visualizer_instance.update_audio_data)
     
     print("Starting microphone input with real-time chromatic note detection...")
-    print("The closest chromatic note to the average of top 3 peaks will be highlighted in red")
+    print("The closest chromatic note to the highest peak will be highlighted in red")
     print("Close the plot window or press Ctrl+C to stop")
     
     try:
