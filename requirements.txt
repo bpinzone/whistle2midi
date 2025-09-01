@@ -3,4 +3,5 @@ python-rtmidi
 sounddevice
 numpy
 librosa
-matplotlib 
+matplotlib
+pynput 
