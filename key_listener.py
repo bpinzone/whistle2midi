@@ -41,7 +41,7 @@ class GlobalKeyListener:
                 # Only update if the key was previously released (avoid key repeat)
                 if self.get_j_key_state() == "released":
                     timestamp = time.strftime('%H:%M:%S') + f".{int(time.time() * 1000) % 1000:04d}"
-                    print(f"J key PRESSED at {timestamp}")
+                    # print(f"J key PRESSED at {timestamp}")
                     self._set_j_key_state("pressed")
                 return True  # Continue listening
                 
@@ -59,7 +59,7 @@ class GlobalKeyListener:
                 # Only update if the key was previously pressed (avoid duplicate releases)
                 if self.get_j_key_state() == "pressed":
                     timestamp = time.strftime('%H:%M:%S') + f".{int(time.time() * 1000) % 1000:04d}"
-                    print(f"J key RELEASED at {timestamp}")
+                    # print(f"J key RELEASED at {timestamp}")
                     self._set_j_key_state("released")
                 return True  # Continue listening
         except AttributeError:
@@ -68,7 +68,7 @@ class GlobalKeyListener:
         
         # Stop listener if ESC is pressed
         if key == keyboard.Key.esc:
-            print("ESC pressed - stopping key listener")
+            # print("ESC pressed - stopping key listener")
             self.stop()
             return False  # Stop listener
         

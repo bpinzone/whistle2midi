@@ -1,6 +1,7 @@
 #!/usr/bin/python3
 
 import time
+from key_listener import GlobalKeyListener
 import mido
 import sounddevice as sd
 import numpy as np
@@ -317,6 +318,12 @@ class ChromaticNoteVisualizer:
         
         print("Chromatic Note Visualizer started.")
         print("Close the plot window or press Ctrl+C to stop")
+
+        # j key listening
+        key_listener = GlobalKeyListener()
+        key_listener.start()
+        last_key_state = None
+        current_key_state = None
         
         detection_time = time.time()
         last_detection_time = detection_time
@@ -324,6 +331,24 @@ class ChromaticNoteVisualizer:
             while self.running and plt.get_fignums():
 
                 peak_freq, peak_mag = self._get_peak_frequency()
+
+                # manage j listening
+                last_key_state = current_key_state
+                current_key_state = key_listener.get_j_key_state()
+
+                if last_key_state is not None and current_key_state is not None:
+                    # we have a history
+                    if last_key_state == "pressed" and current_key_state == "released":
+                        timestamp = time.strftime('%H:%M:%S') + f".{int(time.time() * 1000) % 1000:04d}"
+                        print(f"pitch: J key RELEASED at {timestamp}")
+                        # released
+                        # send_simple_note()
+                    elif last_key_state == "released" and current_key_state == "pressed":
+                        timestamp = time.strftime('%H:%M:%S') + f".{int(time.time() * 1000) % 1000:04d}"
+                        print(f"pitch: J key PRESSED at {timestamp}")
+                        # pressed.
+                        # send_simple_note()
+
                 
                 if peak_freq is not None:
                     closest_freq, closest_name = self._find_closest_note(peak_freq)
