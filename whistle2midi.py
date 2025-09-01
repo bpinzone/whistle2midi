@@ -7,7 +7,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import threading
 
-draw = False
+draw = True
 
 
 def main():
@@ -174,6 +174,82 @@ class ChromaticNoteVisualizer:
         closest_index = np.argmin(distances)
         return self.chromatic_freqs[closest_index], self.chromatic_names[closest_index]
     
+    def _update_note_display(self, peak_freq, peak_mag, closest_freq, closest_name, 
+                           detected_freq_line, detected_note_line, note_text, freq_text, no_note_text):
+        """Update the visual display elements for a detected note"""
+        # Update detected frequency line
+        detected_freq_line.set_xdata([peak_freq, peak_freq])
+        detected_freq_line.set_alpha(0.4)
+        
+        # Update detected note line
+        detected_note_line.set_xdata([closest_freq, closest_freq])
+        detected_note_line.set_alpha(1.0)
+        
+        # Update note text
+        note_text.set_position((closest_freq, 0))
+        note_text.set_text(closest_name)
+        note_text.set_alpha(1.0)
+        
+        # Update frequency text
+        freq_text.set_position((closest_freq, -0.6))
+        freq_text.set_text(f'{peak_freq:.1f} Hz (peak: {peak_mag:.2f})')
+        freq_text.set_alpha(0.8)
+        
+        # Hide "no note" text
+        no_note_text.set_alpha(0)
+    
+    def _hide_note_display(self, detected_freq_line, detected_note_line, note_text, freq_text, no_note_text):
+        """Hide all detection elements and show 'no note' message"""
+        # Hide detection elements
+        detected_freq_line.set_alpha(0)
+        detected_note_line.set_alpha(0)
+        note_text.set_alpha(0)
+        freq_text.set_alpha(0)
+        
+        # Show "no note" text
+        no_note_text.set_alpha(0.7)
+    
+    def _setup_matplotlib_figure(self):
+        """Setup the matplotlib figure and basic plot properties"""
+        fig, ax = plt.subplots(figsize=(12, 6))
+        plt.ion()
+        
+        # Setup plot properties
+        ax.set_xlim(392, 20000)
+        ax.set_ylim(-1, 1)
+        ax.set_xscale('log')
+        ax.set_title('Detected Musical Note', fontsize=16)
+        ax.set_xlabel('Frequency (Hz)', fontsize=12)
+        ax.grid(True, alpha=0.3)
+        ax.set_yticks([])
+        
+        return fig, ax
+    
+    def _draw_static_reference_lines(self, ax):
+        """Draw the static chromatic scale reference lines and labels"""
+        # Chromatic scale reference lines (very light)
+        for freq in self.chromatic_freqs:
+            ax.axvline(x=freq, color='lightgray', linestyle='-', alpha=0.2, linewidth=0.5)
+        
+        # Natural notes with labels
+        for freq, name in zip(self.natural_freqs, self.natural_names):
+            ax.axvline(x=freq, color='gray', linestyle='--', alpha=0.4, linewidth=1)
+            ax.text(freq, 0.8, name, rotation=45, fontsize=10, alpha=0.6, ha='center')
+    
+    def _create_dynamic_elements(self, ax):
+        """Create the dynamic visual elements that will be updated during visualization"""
+        detected_freq_line = ax.axvline(x=1000, color='blue', linestyle='-', alpha=0, linewidth=2)
+        detected_note_line = ax.axvline(x=1000, color='red', linestyle='-', alpha=0, linewidth=5)
+        note_text = ax.text(1000, 0, "", rotation=0, fontsize=24, color='red', weight='bold', 
+                           ha='center', va='center', alpha=0,
+                           bbox=dict(boxstyle="round,pad=0.3", facecolor="white", edgecolor="red"))
+        freq_text = ax.text(1000, -0.6, "", rotation=0, fontsize=14, color='red', 
+                           alpha=0, ha='center')
+        no_note_text = ax.text(1000, 0, "No Note Detected", fontsize=20, color='gray', 
+                              ha='center', va='center', alpha=0)
+        
+        return detected_freq_line, detected_note_line, note_text, freq_text, no_note_text
+    
     def _get_peak_frequency(self):
         """Get the frequency of the highest peak"""
         with self.buffer_lock:
@@ -231,38 +307,13 @@ class ChromaticNoteVisualizer:
         self.running = True
         
         # Setup matplotlib once
-        fig, ax = plt.subplots(figsize=(12, 6))
-        plt.ion()
-        
-        # Setup plot properties once
-        ax.set_xlim(392, 20000)
-        ax.set_ylim(-1, 1)
-        ax.set_xscale('log')
-        ax.set_title('Detected Musical Note', fontsize=16)
-        ax.set_xlabel('Frequency (Hz)', fontsize=12)
-        ax.grid(True, alpha=0.3)
-        ax.set_yticks([])
+        fig, ax = self._setup_matplotlib_figure()
         
         # Draw static reference lines once
-        # Chromatic scale reference lines (very light)
-        for freq in self.chromatic_freqs:
-            ax.axvline(x=freq, color='lightgray', linestyle='-', alpha=0.2, linewidth=0.5)
-        
-        # Natural notes with labels
-        for freq, name in zip(self.natural_freqs, self.natural_names):
-            ax.axvline(x=freq, color='gray', linestyle='--', alpha=0.4, linewidth=1)
-            ax.text(freq, 0.8, name, rotation=45, fontsize=10, alpha=0.6, ha='center')
+        self._draw_static_reference_lines(ax)
         
         # Create dynamic elements that will be updated
-        detected_freq_line = ax.axvline(x=1000, color='blue', linestyle='-', alpha=0, linewidth=2)
-        detected_note_line = ax.axvline(x=1000, color='red', linestyle='-', alpha=0, linewidth=5)
-        note_text = ax.text(1000, 0, "", rotation=0, fontsize=24, color='red', weight='bold', 
-                           ha='center', va='center', alpha=0,
-                           bbox=dict(boxstyle="round,pad=0.3", facecolor="white", edgecolor="red"))
-        freq_text = ax.text(1000, -0.6, "", rotation=0, fontsize=14, color='red', 
-                           alpha=0, ha='center')
-        no_note_text = ax.text(1000, 0, "No Note Detected", fontsize=20, color='gray', 
-                              ha='center', va='center', alpha=0)
+        detected_freq_line, detected_note_line, note_text, freq_text, no_note_text = self._create_dynamic_elements(ax)
         
         print("Chromatic Note Visualizer started.")
         print("Close the plot window or press Ctrl+C to stop")
@@ -277,27 +328,9 @@ class ChromaticNoteVisualizer:
                 if peak_freq is not None:
                     closest_freq, closest_name = self._find_closest_note(peak_freq)
                     if closest_freq is not None:
-                        # Update detected frequency line
-                        detected_freq_line.set_xdata([peak_freq, peak_freq])
-                        detected_freq_line.set_alpha(0.4)
+                        self._update_note_display(peak_freq, peak_mag, closest_freq, closest_name, 
+                                               detected_freq_line, detected_note_line, note_text, freq_text, no_note_text)
                         
-                        # Update detected note line
-                        detected_note_line.set_xdata([closest_freq, closest_freq])
-                        detected_note_line.set_alpha(1.0)
-                        
-                        # Update note text
-                        note_text.set_position((closest_freq, 0))
-                        note_text.set_text(closest_name)
-                        note_text.set_alpha(1.0)
-                        
-                        # Update frequency text
-                        freq_text.set_position((closest_freq, -0.6))
-                        freq_text.set_text(f'{peak_freq:.1f} Hz (peak: {peak_mag:.2f})')
-                        freq_text.set_alpha(0.8)
-                        
-                        # Hide "no note" text
-                        no_note_text.set_alpha(0)
-
                         last_detection_time = detection_time
                         detection_time = time.time()
                         time_between_detections = detection_time - last_detection_time
@@ -306,13 +339,7 @@ class ChromaticNoteVisualizer:
                         print(f"Detected: {closest_name} ({peak_freq:.1f} Hz, peak: {peak_mag:.2f}) between_detection_time: {time_between_detections_ms:.3f}ms")
                 else:
                     # Hide detection elements
-                    detected_freq_line.set_alpha(0)
-                    detected_note_line.set_alpha(0)
-                    note_text.set_alpha(0)
-                    freq_text.set_alpha(0)
-                    
-                    # Show "no note" text
-                    no_note_text.set_alpha(0.7)
+                    self._hide_note_display(detected_freq_line, detected_note_line, note_text, freq_text, no_note_text)
                 
                 if draw:
                     fig.canvas.draw_idle()
