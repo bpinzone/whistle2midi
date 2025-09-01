@@ -15,7 +15,7 @@ def main():
 class ChromaticNoteVisualizer:
     """Real-time chromatic note detection from microphone input"""
     
-    def __init__(self, buffer_size=4096, update_rate_ms=4, sample_rate=44100, n_fft=4096):
+    def __init__(self, buffer_size=4096, update_rate_ms=1, sample_rate=44100, n_fft=4096):
         self.buffer_size = buffer_size
         self.update_rate_ms = update_rate_ms
         self.sample_rate = sample_rate
@@ -178,9 +178,19 @@ class ChromaticNoteVisualizer:
         print("Chromatic Note Visualizer started.")
         print("Close the plot window or press Ctrl+C to stop")
         
+        loop_start = None
+        last_loop_start = None
         try:
             while self.running and plt.get_fignums():
+                last_loop_start = loop_start
+                loop_start = time.time()
+
+                if last_loop_start is not None:
+                    between_loop_time = loop_start - last_loop_start
+                    print(f"Between loop time: {between_loop_time:.5f}s")
+
                 peak_freq, peak_mag = self._get_peak_frequency()
+                peak_attained_time = time.time()
                 
                 if peak_freq is not None:
                     closest_freq, closest_name = self._find_closest_note(peak_freq)
@@ -205,8 +215,10 @@ class ChromaticNoteVisualizer:
                         
                         # Hide "no note" text
                         no_note_text.set_alpha(0)
+                        loop_time = time.time() - loop_start
+                        peak_compute_time = peak_attained_time - loop_start
                         
-                        print(f"Detected: {closest_name} ({peak_freq:.1f} Hz, peak: {peak_mag:.2f})")
+                        print(f"Detected: {closest_name} ({peak_freq:.1f} Hz, peak: {peak_mag:.2f}), loop time: {loop_time:.5f}s, peak compute time: {peak_compute_time:.5f}s")
                 else:
                     # Hide detection elements
                     detected_freq_line.set_alpha(0)
