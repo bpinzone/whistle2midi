@@ -4,6 +4,8 @@ import time
 import mido
 import sounddevice as sd
 import numpy as np
+import matplotlib.pyplot as plt
+import threading
 
 
 def main():
@@ -11,32 +13,66 @@ def main():
     sound_device_demo()
 
 def sound_device_demo():
-    """Demo function showing real-time microphone input using SoundDevice"""
+    """Demo function showing real-time microphone input with simple waveform plotting"""
+    
+    # Shared audio buffer between threads
+    buffer_size = 2048  # Show about 0.05 seconds at 44100 Hz
+    audio_buffer = np.zeros(buffer_size)
+    buffer_lock = threading.Lock()
     
     def audio_callback(indata, frames, time, status):
+        nonlocal audio_buffer
         if status:
             print(f"Audio status: {status}")
         
-        # indata is already a numpy array with shape (frames, channels)
-        audio_samples = indata[:, 0]  # Get mono channel (first channel)
+        # Get mono audio samples
+        audio_samples = indata[:, 0]
         
-        # Print some stats about the audio
-        volume = np.sqrt(np.mean(audio_samples**2))  # RMS volume
-        max_val = np.max(np.abs(audio_samples))
-        print(f"Volume: {volume:.4f}, Max: {max_val:.4f}, Samples: {len(audio_samples)}")
+        # Update the shared buffer (thread-safe)
+        with buffer_lock:
+            shift_amount = len(audio_samples)
+            audio_buffer[:-shift_amount] = audio_buffer[shift_amount:]
+            audio_buffer[-shift_amount:] = audio_samples
     
-    print("Starting audio stream... Speak into your microphone!")
-    print("Press Ctrl+C to stop")
+    print("Starting simple audio waveform plotting...")
+    print("Close the plot window or press Ctrl+C to stop")
+    
+    # Setup matplotlib in main thread
+    plt.figure(figsize=(10, 6))
+    plt.ion()
     
     try:
         # Start audio stream
         with sd.InputStream(callback=audio_callback, 
-                          channels=1,           # Mono
-                          samplerate=44100,     # Sample rate
-                          blocksize=1024):      # Buffer size
-            sd.sleep(10000)  # Keep running for 10 seconds
+                          channels=1,
+                          samplerate=44100,
+                          blocksize=1024):
+            
+            # Main plotting loop in main thread
+            while plt.get_fignums():
+                # Get current buffer data (thread-safe)
+                with buffer_lock:
+                    current_buffer = audio_buffer.copy()
+                
+                # Update plot
+                plt.clf()
+                plt.plot(current_buffer, 'b-', linewidth=1)
+                plt.ylim(-1, 1)
+                plt.title('Real-time Audio Waveform')
+                plt.xlabel('Sample Index')
+                plt.ylabel('Amplitude')
+                plt.grid(True, alpha=0.3)
+                
+                # Refresh the plot
+                plt.pause(0.05)  # Update every 50ms
+                
     except KeyboardInterrupt:
         print("\nAudio stream stopped.")
+    except Exception as e:
+        print(f"Error: {e}")
+    finally:
+        plt.ioff()
+        plt.close('all')
 
 
 def send_simple_note():
