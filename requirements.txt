@@ -1,2 +1,4 @@
 mido
-python-rtmidi 
+python-rtmidi
+sounddevice
+numpy 
