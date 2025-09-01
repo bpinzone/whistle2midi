@@ -13,7 +13,8 @@ def main():
     # send_simple_note()
     # demo_mic_with_visualization()  # Original waveform demo
     # demo_mic_with_fft_visualization()  # Full FFT demo
-    demo_mic_with_peak_fft_visualization(n_peaks=3)  # New peak FFT demo - show top 5 peaks
+    # demo_mic_with_peak_fft_visualization(n_peaks=3)  # New peak FFT demo - show top 5 peaks
+    demo_mic_with_chromatic_note_visualization()  # New chromatic note detection demo
 
 
 class FFTVisualizer:
@@ -424,6 +425,276 @@ class PeakFFTVisualizer:
         self.running = False
         plt.ioff()
         plt.close('all')
+
+
+class ChromaticNoteVisualizer:
+    """Real-time FFT visualizer that highlights the closest chromatic note based on top 3 peaks average"""
+    
+    def __init__(self, buffer_size=4096, update_rate_ms=4, sample_rate=44100, n_fft=4096):
+        self.buffer_size = buffer_size
+        self.update_rate_ms = update_rate_ms
+        self.sample_rate = sample_rate
+        self.n_fft = n_fft
+        self.audio_buffer = np.zeros(buffer_size, dtype=np.float32)
+        self.buffer_lock = threading.Lock()
+        self.running = False
+        
+        # Pre-allocate arrays for performance
+        self.windowed_data = np.zeros(n_fft, dtype=np.float32)
+        self.fft_result = np.zeros(n_fft//2 + 1, dtype=np.complex64)
+        self.magnitude = np.zeros(n_fft//2 + 1, dtype=np.float32)
+        self.hanning_window = np.hanning(n_fft).astype(np.float32)
+        
+        # Setup matplotlib
+        self.fig, (self.ax1, self.ax2) = plt.subplots(2, 1, figsize=(12, 8))
+        plt.ion()
+        
+        # Create frequency bins
+        self.freqs = np.fft.rfftfreq(n_fft, 1/sample_rate).astype(np.float32)
+        self.freq_mask = (self.freqs >= 392) & (self.freqs <= 20000)
+        self.display_freqs = self.freqs[self.freq_mask]
+        self.n_display_freqs = len(self.display_freqs)
+        
+        # Pre-allocate spectrum arrays
+        self.spectrum_full = np.zeros(len(self.freqs), dtype=np.float32)
+        self.spectrum_display = np.zeros(self.n_display_freqs, dtype=np.float32)
+        
+        # Pre-create plot elements
+        self.waveform_line, = self.ax1.plot([], [], 'b-', linewidth=1)
+        self.x_waveform = np.arange(buffer_size, dtype=np.float32)
+        
+        # Setup axes and chromatic scale
+        self._setup_chromatic_scale()
+        self._setup_axes()
+        
+        # Track current highlighted note
+        self.current_highlighted_note = None
+        self.highlighted_elements = []  # Store references to highlighted elements
+    
+    def _setup_chromatic_scale(self):
+        """Pre-compute all chromatic scale frequencies and note names"""
+        note_names_chromatic = ['G', 'G#', 'A', 'A#', 'B', 'C', 'C#', 'D', 'D#', 'E', 'F', 'F#']
+        semitone_ratio = 2**(1/12)
+        base_freq = 392.0  # G4
+        base_octave = 4
+        
+        self.chromatic_freqs = []
+        self.chromatic_names = []
+        
+        current_freq = base_freq
+        octave = base_octave
+        note_index = 0
+        
+        while current_freq <= 20000:
+            self.chromatic_freqs.append(current_freq)
+            note_name = note_names_chromatic[note_index]
+            self.chromatic_names.append(f"{note_name}{octave}")
+            
+            current_freq *= semitone_ratio
+            note_index += 1
+            if note_index >= len(note_names_chromatic):
+                note_index = 0
+                octave += 1
+        
+        # Convert to numpy arrays for efficiency
+        self.chromatic_freqs = np.array(self.chromatic_freqs, dtype=np.float32)
+        
+        # Separate natural notes for regular display
+        self.natural_freqs = []
+        self.natural_names = []
+        for freq, name in zip(self.chromatic_freqs, self.chromatic_names):
+            if '#' not in name:
+                self.natural_freqs.append(freq)
+                self.natural_names.append(name)
+        
+        self.natural_freqs = np.array(self.natural_freqs, dtype=np.float32)
+    
+    def _setup_axes(self):
+        """Setup plot axes"""
+        # Waveform plot
+        self.ax1.set_xlim(0, self.buffer_size)
+        self.ax1.set_ylim(-1, 1)
+        self.ax1.set_title('Real-time Audio Waveform')
+        self.ax1.set_xlabel('Sample Index')
+        self.ax1.set_ylabel('Amplitude')
+        self.ax1.grid(True, alpha=0.3)
+        
+        # Spectrum plot
+        self.ax2.set_xlim(392, 20000)
+        self.ax2.set_ylim(-10, 5)
+        self.ax2.set_xscale('log')
+        self.ax2.set_title('FFT Spectrum with Detected Note')
+        self.ax2.set_xlabel('Frequency (Hz)')
+        self.ax2.set_ylabel('Magnitude (log10)')
+        self.ax2.grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+    
+    def _find_closest_chromatic_note(self, frequency):
+        """Find the closest chromatic note to a given frequency"""
+        if frequency < self.chromatic_freqs[0] or frequency > self.chromatic_freqs[-1]:
+            return None, None
+        
+        # Find the closest frequency
+        distances = np.abs(self.chromatic_freqs - frequency)
+        closest_index = np.argmin(distances)
+        
+        return self.chromatic_freqs[closest_index], self.chromatic_names[closest_index]
+    
+    def _get_top_3_peaks_average(self):
+        """Get the frequency-weighted average of the top 3 peaks"""
+        # Compute spectrum
+        with self.buffer_lock:
+            if len(self.audio_buffer) >= self.n_fft:
+                self.windowed_data[:] = self.audio_buffer[-self.n_fft:] * self.hanning_window
+            else:
+                self.windowed_data[:len(self.audio_buffer)] = self.audio_buffer * self.hanning_window[:len(self.audio_buffer)]
+                self.windowed_data[len(self.audio_buffer):] = 0
+        
+        # FFT computation
+        np.fft.rfft(self.windowed_data, n=self.n_fft, out=self.fft_result)
+        np.abs(self.fft_result, out=self.magnitude)
+        np.maximum(self.magnitude, 1e-10, out=self.magnitude)
+        np.log10(self.magnitude, out=self.spectrum_full)
+        
+        # Extract display range
+        self.spectrum_display[:] = self.spectrum_full[self.freq_mask]
+        
+        # Find top 3 peaks
+        if len(self.spectrum_display) < 3:
+            return None, self.spectrum_display
+        
+        top_3_indices = np.argpartition(self.spectrum_display, -3)[-3:]
+        top_3_freqs = self.display_freqs[top_3_indices]
+        top_3_mags = self.spectrum_display[top_3_indices]
+        
+        # Check if all top 3 peaks are below threshold (0)
+        if np.all(top_3_mags < 0):
+            return None, self.spectrum_display
+        
+        # Calculate weighted average frequency (weight by magnitude)
+        # Use only positive magnitudes for weighting
+        positive_mask = top_3_mags > 0
+        if not np.any(positive_mask):
+            return None, self.spectrum_display
+        
+        weights = top_3_mags[positive_mask]
+        freqs = top_3_freqs[positive_mask]
+        
+        # Normalize weights to sum to 1
+        weights = weights / np.sum(weights)
+        average_freq = np.sum(freqs * weights)
+        
+        return average_freq, self.spectrum_display
+    
+    def update_audio_data(self, audio_samples):
+        """Update the audio buffer with new samples (thread-safe)"""
+        with self.buffer_lock:
+            shift_amount = len(audio_samples)
+            self.audio_buffer[:-shift_amount] = self.audio_buffer[shift_amount:]
+            self.audio_buffer[-shift_amount:] = audio_samples.astype(np.float32)
+    
+    def start_visualization(self):
+        """Start the real-time chromatic note detection visualization"""
+        self.running = True
+        print("Chromatic Note Visualizer started. Detecting closest note from top 3 peaks average.")
+        print("Close the plot window or press Ctrl+C to stop")
+        
+        try:
+            while self.running and plt.get_fignums():
+                # Get current buffer and compute average frequency
+                with self.buffer_lock:
+                    current_buffer = self.audio_buffer.copy()
+                
+                average_freq, spectrum = self._get_top_3_peaks_average()
+                
+                # Update waveform
+                self.waveform_line.set_data(self.x_waveform, current_buffer)
+                
+                # Clear and redraw spectrum plot
+                self.ax2.clear()
+                self.ax2.plot(self.display_freqs, spectrum, 'b-', linewidth=1, alpha=0.7)
+                
+                # Reset axis properties
+                self.ax2.set_xlim(392, 20000)
+                self.ax2.set_ylim(-10, 5)
+                self.ax2.set_xscale('log')
+                self.ax2.set_title('FFT Spectrum with Detected Note')
+                self.ax2.set_xlabel('Frequency (Hz)')
+                self.ax2.set_ylabel('Magnitude (log10)')
+                self.ax2.grid(True, alpha=0.3)
+                
+                # Draw all chromatic scale lines (light)
+                for freq in self.chromatic_freqs:
+                    self.ax2.axvline(x=freq, color='lightgray', linestyle='-', alpha=0.3, linewidth=0.5)
+                
+                # Draw natural notes (darker)
+                for freq, name in zip(self.natural_freqs, self.natural_names):
+                    self.ax2.axvline(x=freq, color='gray', linestyle='--', alpha=0.7, linewidth=1)
+                    self.ax2.text(freq, 4, name, rotation=45, fontsize=8, alpha=0.8)
+                
+                # Highlight detected note in red
+                if average_freq is not None:
+                    closest_freq, closest_name = self._find_closest_chromatic_note(average_freq)
+                    if closest_freq is not None:
+                        # Highlight the detected note
+                        self.ax2.axvline(x=closest_freq, color='red', linestyle='-', alpha=0.9, linewidth=3)
+                        self.ax2.text(closest_freq, -8, closest_name, rotation=45, fontsize=12, 
+                                    color='red', weight='bold', alpha=1.0)
+                        
+                        # Add average frequency indicator
+                        self.ax2.axvline(x=average_freq, color='orange', linestyle=':', alpha=0.8, linewidth=2)
+                        self.ax2.text(average_freq, -6, f'{average_freq:.1f}Hz', rotation=45, 
+                                    fontsize=10, color='orange', alpha=0.9)
+                
+                # Redraw
+                self.fig.canvas.draw_idle()
+                self.fig.canvas.flush_events()
+                
+                plt.pause(self.update_rate_ms / 1000.0)
+                
+        except KeyboardInterrupt:
+            print("\nChromatic Note Visualizer stopped by user.")
+        finally:
+            self.stop_visualization()
+    
+    def stop_visualization(self):
+        """Stop the visualization"""
+        self.running = False
+        plt.ioff()
+        plt.close('all')
+
+
+def demo_mic_with_chromatic_note_visualization():
+    """Demo function for chromatic note detection visualization"""
+    
+    global chromatic_visualizer_instance
+    
+    # Create chromatic note visualizer and microphone input
+    chromatic_visualizer_instance = ChromaticNoteVisualizer(buffer_size=4096, update_rate_ms=4, sample_rate=44100, n_fft=4096)
+    mic_input = MicrophoneInput(samplerate=44100, channels=1, blocksize=128)
+    
+    # Connect microphone to visualizer
+    mic_input.set_audio_callback(chromatic_visualizer_instance.update_audio_data)
+    
+    print("Starting microphone input with real-time chromatic note detection...")
+    print("The closest chromatic note to the average of top 3 peaks will be highlighted in red")
+    print("Close the plot window or press Ctrl+C to stop")
+    
+    try:
+        with mic_input:
+            chromatic_visualizer_instance.start_visualization()
+            
+    except KeyboardInterrupt:
+        print("\nChromatic Note Demo stopped by user.")
+    except Exception as e:
+        print(f"Error: {e}")
+    finally:
+        chromatic_visualizer_instance.stop_visualization()
+
+
+# Initialize global variable
+chromatic_visualizer_instance = None
 
 
 def demo_mic_with_fft_visualization():
